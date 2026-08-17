@@ -3,20 +3,21 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# Telegram
-TG_API_ID = int(os.getenv("TG_API_ID"))
-TG_API_HASH = os.getenv("TG_API_HASH")
-TG_PHONE = os.getenv("TG_PHONE")
-TG_BOT_USERNAME = os.getenv("TG_BOT_USERNAME", "gta5rp_helperbot")
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+GUILD_ID = int(os.getenv("GUILD_ID", "0"))
 
-# Discord (используем твои существующие имена из .env)
-DISCORD_TOKEN = os.getenv("BOT_TOKEN")
-DISCORD_ALERT_CHANNEL_ID = int(os.getenv("ALERT_CHANNEL_ID"))
-DISCORD_GUILD_ID = int(os.getenv("GUILD_ID"))
-PING_ROLE_ID = int(os.getenv("PING_ROLE_ID", "0"))
+ADMIN_ROLE_ID = int(os.getenv("ADMIN_ROLE_ID", "0"))
+SPECIAL_ROLE_ID = int(os.getenv("SPECIAL_ROLE_ID", "0"))
 
-# Оформление
-FAMILY_NAME = os.getenv("OUR_FACTION", "Agony")
+TICKET_CATEGORY_ID = int(os.getenv("TICKET_CATEGORY_ID", "0"))
+TICKET_LOG_CHANNEL_ID = int(os.getenv("TICKET_LOG_CHANNEL_ID", "0"))
+SERVER_LOG_CHANNEL_ID = int(os.getenv("SERVER_LOG_CHANNEL_ID", "0"))
 
-# История
-HISTORY_LIMIT = int(os.getenv("HISTORY_LIMIT", "50"))
+ALERT_CHANNEL_ID = int(os.getenv("ALERT_CHANNEL_ID", "0"))
+HISTORY_CHANNEL_ID = int(os.getenv("HISTORY_CHANNEL_ID", "0"))
+OUR_FACTION = os.getenv("OUR_FACTION", "Мексиканская Мафия")
+OUR_SERVER_SID = os.getenv("OUR_SERVER_SID", "08")
+
+EMBED_COLOR = 0x2B2D31
+MAX_OPEN_TICKETS_PER_USER = 2
+CLEAR_LIMIT = 100

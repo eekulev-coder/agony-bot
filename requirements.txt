@@ -2,4 +2,3 @@ discord.py==2.4.0
 python-dotenv==1.0.1
 aiohttp==3.10.11
 tzdata==2024.1
-telethon==1.36.0
