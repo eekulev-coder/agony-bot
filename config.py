@@ -3,21 +3,29 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-GUILD_ID = int(os.getenv("GUILD_ID", "0"))
+# Telegram
+TG_API_ID = int(os.getenv("TG_API_ID"))
+TG_API_HASH = os.getenv("TG_API_HASH")
+TG_PHONE = os.getenv("TG_PHONE")
+TG_BOT_USERNAME = os.getenv("TG_BOT_USERNAME", "gta5rp_helperbot")
 
-ADMIN_ROLE_ID = int(os.getenv("ADMIN_ROLE_ID", "0"))
-SPECIAL_ROLE_ID = int(os.getenv("SPECIAL_ROLE_ID", "0"))
+# Discord
+DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
+DISCORD_ALERT_CHANNEL_ID = int(os.getenv("DISCORD_ALERT_CHANNEL_ID"))
+DISCORD_GUILD_ID = int(os.getenv("DISCORD_GUILD_ID"))
+PING_ROLE_ID = int(os.getenv("PING_ROLE_ID", "0"))
 
-TICKET_CATEGORY_ID = int(os.getenv("TICKET_CATEGORY_ID", "0"))
-TICKET_LOG_CHANNEL_ID = int(os.getenv("TICKET_LOG_CHANNEL_ID", "0"))
-SERVER_LOG_CHANNEL_ID = int(os.getenv("SERVER_LOG_CHANNEL_ID", "0"))
+# Настройки
+FAMILY_NAME = os.getenv("FAMILY_NAME", "Mexican Mafia")
 
-ALERT_CHANNEL_ID = int(os.getenv("ALERT_CHANNEL_ID", "0"))
-HISTORY_CHANNEL_ID = int(os.getenv("HISTORY_CHANNEL_ID", "0"))
-OUR_FACTION = os.getenv("OUR_FACTION", "Мексиканская Мафия")
-OUR_SERVER_SID = os.getenv("OUR_SERVER_SID", "08")
+# Ключевая фраза для фильтрации
+TRIGGER_PHRASE = "Вам забили войну"
 
-EMBED_COLOR = 0x2B2D31
-MAX_OPEN_TICKETS_PER_USER = 2
-CLEAR_LIMIT = 100
+# История: сколько сообщений подгрузить при старте
+HISTORY_LIMIT = int(os.getenv("HISTORY_LIMIT", "50"))
+
+# Автооповещения: за сколько минут напоминать
+REMIND_BEFORE_MINUTES = [15, 5, 1]  # напомним за 15, 5 и 1 минуту
+
+# Файл для хранения обработанных сообщений (чтобы не дублировать)
+PROCESSED_FILE = "processed_messages.json"
