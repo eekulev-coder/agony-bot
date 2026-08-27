@@ -460,6 +460,7 @@ class BattleMonitor(commands.Cog):
 
         wins = 0
         losses = 0
+        our_short_name = short(self.our_faction)
 
         try:
             async for msg in history_ch.history(limit=None):
@@ -470,17 +471,19 @@ class BattleMonitor(commands.Cog):
 
                 for embed in msg.embeds:
                     desc = embed.description or ""
-                    if "🏆 WIN" in desc:
-                        wins += 1
-                    elif "💀 LOSS" in desc:
-                        losses += 1
+                    # Считаем только те бои, где участвует текущая фракция (например **BLD** или **BSG**)
+                    if f"**{our_short_name}**" in desc or f"**{self.our_faction}**" in desc:
+                        if "🏆 WIN" in desc:
+                            wins += 1
+                        elif "💀 LOSS" in desc:
+                            losses += 1
         except Exception as e:
             return await interaction.followup.send(f"Ошибка чтения истории: `{e}`")
 
         total = wins + losses
 
         if total == 0:
-            return await interaction.followup.send("В канале истории нет данных для подсчёта.")
+            return await interaction.followup.send(f"В канале истории не найдено боев для фракции **{self.our_faction}**.")
 
         pct = round(wins / total * 100)
 
@@ -496,7 +499,7 @@ class BattleMonitor(commands.Cog):
             description=f"**{wins}W / {losses}L**  •  `{pct}%`",
             color=color
         )
-        embed.set_footer(text=f"Посчитано по {total} битвам в истории")
+        embed.set_footer(text=f"Посчитано по {total} битвам {short(self.our_faction)} в истории")
 
         await interaction.followup.send(embed=embed)
 
