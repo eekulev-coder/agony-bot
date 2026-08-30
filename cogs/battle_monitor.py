@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import re
 import json
 import aiohttp
@@ -37,7 +38,22 @@ MAX_SEEN_STORED = 500
 # Роль, которая может пользоваться /whoattacks и /winrate
 STATS_ROLE_ID = 1523021893844730011
 
-# Сокращения фракций
+SERVER_NAMES = {
+    "01": "Downtown",
+    "02": "Strawberry",
+    "03": "Vinewood",
+    "04": "Blackberry",
+    "05": "Insquad",
+    "06": "Sunrise",
+    "07": "Rainbow",
+    "08": "Richman",
+    "09": "Eclipse",
+    "10": "Lamesa",
+    "11": "Burton",
+    "12": "Rockford",
+    "13": "Alta",
+}
+
 FACTION_SHORT = {
     "Мексиканская Мафия": "MM",
     "Русская Мафия": "RM",
@@ -77,6 +93,11 @@ def short(name: str) -> str:
     return FACTION_SHORT.get(name, name)
 
 
+def sname(sid: str) -> str:
+    s = str(sid).zfill(2)
+    return SERVER_NAMES.get(s, f"Server #{s}")
+
+
 def fmt_time(ms: int) -> str:
     if not ms:
         return "—"
@@ -90,10 +111,6 @@ def fmt_datetime(ms: int) -> str:
 
 
 def split_players(total: int) -> tuple[int, int]:
-    """
-    Разбивка игроков поровну. Если нечётное — обе стороны округляются вверх.
-    Пример: 13 → 7 vs 7, 15 → 8 vs 8, 10 → 5 vs 5
-    """
     if not total or total < 2:
         return (0, 0)
     half = (total + 1) // 2
@@ -101,7 +118,6 @@ def split_players(total: int) -> tuple[int, int]:
 
 
 def has_stats_role(member: discord.Member) -> bool:
-    """Проверка что у пользователя есть роль для статистики или админка"""
     if is_admin(member):
         return True
     return any(r.id == STATS_ROLE_ID for r in member.roles)
@@ -110,13 +126,29 @@ def has_stats_role(member: discord.Member) -> bool:
 class BattleMonitor(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        self.our_faction = OUR_FACTION
-        self.our_sid = OUR_SERVER_SID
         self.first_run = True
         self.check_battles.start()
 
     def cog_unload(self):
         self.check_battles.cancel()
+
+    def get_targets((self) -> list[dict]:
+        """Возвращает список отслеживаемых фракций и серверов"""
+        targets = []
+        
+        # Инвайт 1 (основной)
+        f1 = os.getenv("OUR_FACTION", OUR_FACTION)
+        s1 = str(os.getenv("OUR_SERVER_SID", OUR_SERVER_SID)).zfill(2)
+        if f1:
+            targets.append({"faction": f1, "sid": s1})
+
+        # Инвайт 2
+        f2 = os.getenv("OUR_FACTION_2", "Армянская Мафия")
+        s2 = str(os.getenv("OUR_SERVER_SID_2", "06")).zfill(2)
+        if f2 and f2.upper() != "NONE":
+            targets.append({"faction": f2, "sid": s2})
+
+        return targets
 
     def load_state(self):
         return read_json(STATE_PATH, {"seen_battles": [], "attackers": {}})
@@ -126,7 +158,7 @@ class BattleMonitor(commands.Cog):
             state["seen_battles"] = state["seen_battles"][-MAX_SEEN_STORED:]
         write_json(STATE_PATH, state)
 
-    def _headers(self):
+    def _headers(self, sid: str):
         return {
             "Accept": "text/x-component",
             "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
@@ -134,7 +166,7 @@ class BattleMonitor(commands.Cog):
             "Next-Action": NEXT_ACTION,
             "Next-Router-State-Tree": NEXT_ROUTER_STATE_TREE,
             "Origin": "https://gta5rp-bot.com",
-            "Referer": f"https://gta5rp-bot.com/battles?sid={self.our_sid}",
+            "Referer": f"https://gta5rp-bot.com/battles?sid={sid}",
             "User-Agent": (
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                 "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -142,28 +174,28 @@ class BattleMonitor(commands.Cog):
             ),
         }
 
-    async def fetch_page(self, session: aiohttp.ClientSession, cursor: str = "") -> str:
-        payload = json.dumps([self.our_sid, "", "", cursor])
+    async def fetch_page(self, session: aiohttp.ClientSession, sid: str, cursor: str = "") -> str:
+        payload = json.dumps([sid, "", "", cursor])
         async with session.post(
-            f"{BASE_URL}?sid={self.our_sid}",
-            headers=self._headers(),
+            f"{BASE_URL}?sid={sid}",
+            headers=self._headers(sid),
             data=payload
         ) as resp:
             if resp.status != 200:
                 return ""
             return await resp.text()
 
-    async def fetch_latest_battles(self) -> list[dict]:
+    async def fetch_latest_battles(self, sid: str) -> list[dict]:
         timeout = aiohttp.ClientTimeout(total=15)
         try:
             async with aiohttp.ClientSession(timeout=timeout) as session:
-                text = await self.fetch_page(session)
+                text = await self.fetch_page(session, sid)
         except Exception as e:
-            print(f"[BATTLE_MONITOR] fetch error: {e}")
+            print(f"[BATTLE_MONITOR] fetch error for SID {sid}: {e}")
             return []
         return self.parse_battles(text)
 
-    async def fetch_all_battles(self, max_pages: int = 50) -> list[dict]:
+    async def fetch_all_battles_for_sid(self, sid: str, max_pages: int = 50) -> list[dict]:
         all_battles: list[dict] = []
         cursor = ""
         seen_keys: set[str] = set()
@@ -172,9 +204,9 @@ class BattleMonitor(commands.Cog):
         async with aiohttp.ClientSession(timeout=timeout) as session:
             for _ in range(max_pages):
                 try:
-                    text = await self.fetch_page(session, cursor)
+                    text = await self.fetch_page(session, sid, cursor)
                 except Exception as e:
-                    print(f"[BATTLE_MONITOR] page fetch error: {e}")
+                    print(f"[BATTLE_MONITOR] page fetch error for SID {sid}: {e}")
                     break
 
                 if not text:
@@ -239,24 +271,18 @@ class BattleMonitor(commands.Cog):
 
         return battles
 
-    def is_our_battle(self, b: dict) -> bool:
+    def is_our_battle(self, b: dict, our_faction: str, our_sid: str) -> bool:
         return (
-            b["sid"] == self.our_sid
-            and (b["attack"] == self.our_faction or b["defense"] == self.our_faction)
+            b["sid"] == our_sid
+            and (b["attack"] == our_faction or b["defense"] == our_faction)
         )
-
-    def our_role(self, b: dict) -> str:
-        return "attack" if b["attack"] == self.our_faction else "defense"
-
-    def is_win(self, b: dict) -> bool:
-        return b["winner"] == self.our_faction
 
     def btype(self, b: dict) -> str:
         return "Бизвар" if b["isBizwar"] else "Капт"
 
     # ========= HISTORY =========
-    def build_history_embed(self, b: dict) -> discord.Embed:
-        win = self.is_win(b)
+    def build_history_embed(self, b: dict, our_faction: str) -> discord.Embed:
+        win = b["winner"] == our_faction
         bt = self.btype(b)
 
         if win:
@@ -273,9 +299,10 @@ class BattleMonitor(commands.Cog):
 
         atk_p, dfn_p = split_players(b["players"])
         players_line = f"⚔️  `{atk_p} vs {dfn_p}`" if atk_p > 0 else "⚔️"
+        srv = sname(b["sid"])
 
         description = (
-            f"**{result} • {bt}**\n\n"
+            f"**{result} • {bt}**  •  `{srv}`\n\n"
             f"{atk_flag} **{atk_short}**\n"
             f"{players_line}\n"
             f"{def_flag} **{def_short}**\n\n"
@@ -291,8 +318,8 @@ class BattleMonitor(commands.Cog):
         return embed
 
     # ========= ALERTS =========
-    def build_alert_embed(self, b: dict) -> tuple[discord.Embed, bool] | None:
-        role = self.our_role(b)
+    def build_alert_embed(self, b: dict, our_faction: str) -> tuple[discord.Embed, bool] | None:
+        role = "attack" if b["attack"] == our_faction else "defense"
         bt = self.btype(b)
 
         atk_flag = flag(b["attack"])
@@ -300,6 +327,7 @@ class BattleMonitor(commands.Cog):
         atk_short = short(b["attack"])
         def_short = short(b["defense"])
         atk_p, dfn_p = split_players(b["players"])
+        srv = sname(b["sid"])
 
         # НАС АТАКУЮТ
         if role == "defense" and not b["winner"]:
@@ -307,8 +335,8 @@ class BattleMonitor(commands.Cog):
             color = 0xFF3300
             ping = True
             desc = (
-                f"{atk_flag} **{atk_short}**  ⚔️  {def_flag} **Мы**\n"
-                f"📍 `{b['place'] or '—'}` • {bt}\n"
+                f"{atk_flag} **{atk_short}**  ⚔️  {def_flag} **Мы ({short(our_faction)})**\n"
+                f"🌐 Сервер: `{srv}` • 📍 `{b['place'] or '—'}` • {bt}\n"
                 f"👥 `{atk_p} vs {dfn_p}`\n"
                 f"🕐 Начало: `{fmt_time(b['createdAt'])}`"
             )
@@ -321,8 +349,8 @@ class BattleMonitor(commands.Cog):
             color = 0x1F8B4C
             ping = True
             desc = (
-                f"{atk_flag} **Мы**  ⚔️  {def_flag} **{def_short}**\n"
-                f"📍 `{b['place'] or '—'}` • {bt}\n"
+                f"{atk_flag} **Мы ({short(our_faction)})**  ⚔️  {def_flag} **{def_short}**\n"
+                f"🌐 Сервер: `{srv}` • 📍 `{b['place'] or '—'}` • {bt}\n"
                 f"👥 `{atk_p} vs {dfn_p}`\n"
                 f"🕐 Начало: `{fmt_time(b['createdAt'])}`"
             )
@@ -333,28 +361,37 @@ class BattleMonitor(commands.Cog):
 
     @tasks.loop(minutes=CHECK_INTERVAL_MINUTES)
     async def check_battles(self):
-        try:
-            battles = await self.fetch_latest_battles()
-        except Exception as e:
-            print(f"[BATTLE_MONITOR] check error: {e}")
-            return
-
-        if not battles:
-            return
-
         state = self.load_state()
         seen = set(state.get("seen_battles", []))
         attackers = state.get("attackers", {})
 
-        our_new = [b for b in battles if self.is_our_battle(b) and b["eventId"] not in seen]
+        targets = self.get_targets()
+        our_new = []
+
+        for t in targets:
+            fac = t["faction"]
+            sid = t["sid"]
+            try:
+                battles = await self.fetch_latest_battles(sid)
+                for b in battles:
+                    if self.is_our_battle(b, fac, sid) and b["eventId"] not in seen:
+                        b["_our_faction"] = fac
+                        our_new.append(b)
+            except Exception as e:
+                print(f"[BATTLE_MONITOR] check error for {fac} ({sid}): {e}")
 
         if self.first_run:
-            for b in battles:
-                seen.add(b["eventId"])
+            for t in targets:
+                try:
+                    battles = await self.fetch_latest_battles(t["sid"])
+                    for b in battles:
+                        seen.add(b["eventId"])
+                except Exception:
+                    pass
             state["seen_battles"] = list(seen)
             self.save_state(state)
             self.first_run = False
-            print(f"[BATTLE_MONITOR] initial sync: {len(battles)} marked as seen")
+            print(f"[BATTLE_MONITOR] initial sync complete for {len(targets)} targets")
             return
 
         if not our_new:
@@ -366,8 +403,9 @@ class BattleMonitor(commands.Cog):
         history_ch = self.bot.get_channel(HISTORY_CHANNEL_ID)
 
         for battle in our_new:
+            ofac = battle["_our_faction"]
             if alert_ch:
-                alert_result = self.build_alert_embed(battle)
+                alert_result = self.build_alert_embed(battle, ofac)
                 if alert_result is not None:
                     embed, ping = alert_result
                     try:
@@ -383,14 +421,16 @@ class BattleMonitor(commands.Cog):
             if history_ch:
                 try:
                     await history_ch.send(
-                        embed=self.build_history_embed(battle),
+                        embed=self.build_history_embed(battle, ofac),
                         allowed_mentions=discord.AllowedMentions.none()
                     )
                 except Exception as e:
                     print(f"[BATTLE_MONITOR] history error: {e}")
 
-            if self.our_role(battle) == "defense" and battle["attack"]:
-                attackers[battle["attack"]] = attackers.get(battle["attack"], 0) + 1
+            role = "attack" if battle["attack"] == ofac else "defense"
+            if role == "defense" and battle["attack"]:
+                atk_key = f"{battle['attack']} ({sname(battle['sid'])})"
+                attackers[atk_key] = attackers.get(atk_key, 0) + 1
 
             seen.add(battle["eventId"])
 
@@ -407,7 +447,7 @@ class BattleMonitor(commands.Cog):
 
     # ================== COMMANDS ==================
 
-    @app_commands.command(name="whoattacks", description="Топ атакующих на нашу мафию")
+    @app_commands.command(name="whoattacks", description="Топ атакующих на наши фракции")
     async def whoattacks(self, interaction: discord.Interaction):
         if not isinstance(interaction.user, discord.Member) or not has_stats_role(interaction.user):
             return await interaction.response.send_message(
@@ -430,12 +470,13 @@ class BattleMonitor(commands.Cog):
 
         medals = ["🥇", "🥈", "🥉"]
         lines = []
-        for i, (name, count) in enumerate(sorted_atk[:15]):
+        for i, (name_key, count) in enumerate(sorted_atk[:15]):
             medal = medals[i] if i < 3 else f"`{i + 1}.`"
-            lines.append(f"{medal} {flag(name)} **{short(name)}** — `{count}`")
+            # name_key looks like "Русская Мафия (Richman)"
+            lines.append(f"{medal} **{name_key}** — `{count}`")
 
         embed = discord.Embed(
-            title=f"⚔️ Топ атакующих на {short(self.our_faction)}",
+            title="⚔️ Топ атакующих на наши фракции",
             description="\n".join(lines),
             color=EMBED_COLOR
         )
@@ -443,7 +484,7 @@ class BattleMonitor(commands.Cog):
 
         await interaction.followup.send(embed=embed, ephemeral=True)
 
-    @app_commands.command(name="winrate", description="Винрейт нашей мафии")
+    @app_commands.command(name="winrate", description="Винрейт наших фракций")
     async def winrate(self, interaction: discord.Interaction):
         if not isinstance(interaction.user, discord.Member) or not has_stats_role(interaction.user):
             return await interaction.response.send_message(
@@ -451,55 +492,71 @@ class BattleMonitor(commands.Cog):
                 ephemeral=True
             )
 
-        # публичный ответ — видят все
         await interaction.response.defer(thinking=True)
 
         history_ch = self.bot.get_channel(HISTORY_CHANNEL_ID)
         if not history_ch:
             return await interaction.followup.send("Канал истории не найден.")
 
-        wins = 0
-        losses = 0
-        our_short_name = short(self.our_faction)
+        targets = self.get_targets()
+        stats = {t["faction"]: {"wins": 0, "losses": 0, "sid": t["sid"]} for t in targets}
+
+        total_wins = 0
+        total_losses = 0
 
         try:
             async for msg in history_ch.history(limit=None):
-                if msg.author.id != self.bot.user.id:
-                    continue
-                if not msg.embeds:
+                if msg.author.id != self.bot.user.id or not msg.embeds:
                     continue
 
                 for embed in msg.embeds:
                     desc = embed.description or ""
-                    # Считаем только те бои, где участвует текущая фракция (например **BLD** или **BSG**)
-                    if f"**{our_short_name}**" in desc or f"**{self.our_faction}**" in desc:
-                        if "🏆 WIN" in desc:
-                            wins += 1
-                        elif "💀 LOSS" in desc:
-                            losses += 1
+                    is_win = "🏆 WIN" in desc
+                    is_loss = "💀 LOSS" in desc
+
+                    if not (is_win or is_loss):
+                        continue
+
+                    for t in targets:
+                        fac = t["faction"]
+                        fac_short = short(fac)
+                        if f"**{fac_short}**" in desc or f"**{fac}**" in desc:
+                            if is_win:
+                                stats[fac]["wins"] += 1
+                                total_wins += 1
+                            elif is_loss:
+                                stats[fac]["losses"] += 1
+                                total_losses += 1
+                            break
         except Exception as e:
             return await interaction.followup.send(f"Ошибка чтения истории: `{e}`")
 
-        total = wins + losses
+        grand_total = total_wins + total_losses
 
-        if total == 0:
-            return await interaction.followup.send(f"В канале истории не найдено боев для фракции **{self.our_faction}**.")
+        if grand_total == 0:
+            return await interaction.followup.send("В канале истории нет данных для подсчёта.")
 
-        pct = round(wins / total * 100)
+        lines = []
+        for fac, data in stats.items():
+            w = data["wins"]
+            l = data["losses"]
+            tot = w + l
+            srv = sname(data["sid"])
+            if tot > 0:
+                p = round(w / tot * 100)
+                lines.append(f"{flag(fac)} **{short(fac)}** (`{srv}`): `{w}W / {l}L` (`{p}%`) ")
 
-        if pct >= 60:
-            color = 0x1F8B4C
-        elif pct >= 45:
-            color = 0xF39C12
-        else:
-            color = 0xE74C3C
+        overall_pct = round(total_wins / grand_total * 100)
+        lines.append(f"\n📊 **Общий винрейт**: `{total_wins}W / {total_losses}L` (`{overall_pct}%`) ")
+
+        color = 0x1F8B4C if overall_pct >= 60 else (0xF39C12 if overall_pct >= 45 else 0xE74C3C)
 
         embed = discord.Embed(
-            title=f"📊 Winrate • {short(self.our_faction)}",
-            description=f"**{wins}W / {losses}L**  •  `{pct}%`",
+            title="📊 Winrate наших фракций",
+            description="\n".join(lines),
             color=color
         )
-        embed.set_footer(text=f"Посчитано по {total} битвам {short(self.our_faction)} в истории")
+        embed.set_footer(text=f"Посчитано по {grand_total} битвам в истории")
 
         await interaction.followup.send(embed=embed)
 
@@ -520,24 +577,29 @@ class BattleMonitor(commands.Cog):
             return await interaction.followup.send("Канал истории не найден.", ephemeral=True)
 
         await interaction.followup.send(
-            f"⏳ Загружаю битвы за последние {days} дн...",
+            f"⏳ Загружаю битвы всех фракций за последние {days} дн...",
             ephemeral=True
         )
 
-        try:
-            all_battles = await self.fetch_all_battles(max_pages=50)
-        except Exception as e:
-            return await interaction.followup.send(f"Ошибка загрузки: `{e}`", ephemeral=True)
-
+        targets = self.get_targets()
+        our_battles = []
         cutoff_ms = (dt.datetime.now() - dt.timedelta(days=days)).timestamp() * 1000
 
-        our = [
-            b for b in all_battles
-            if self.is_our_battle(b) and b["createdAt"] >= cutoff_ms
-        ]
-        our.sort(key=lambda b: b["createdAt"])
+        for t in targets:
+            fac = t["faction"]
+            sid = t["sid"]
+            try:
+                battles = await self.fetch_all_battles_for_sid(sid, max_pages=50)
+                for b in battles:
+                    if self.is_our_battle(b, fac, sid) and b["createdAt"] >= cutoff_ms:
+                        b["_our_faction"] = fac
+                        our_battles.append(b)
+            except Exception as e:
+                print(f"[BACKFILL] error fetching for {fac} ({sid}): {e}")
 
-        if not our:
+        our_battles.sort(key=lambda b: b["createdAt"])
+
+        if not our_battles:
             return await interaction.followup.send(
                 f"За последние {days} дн битв не найдено.",
                 ephemeral=True
@@ -545,7 +607,7 @@ class BattleMonitor(commands.Cog):
 
         state = self.load_state()
         seen = set(state.get("seen_battles", []))
-        for b in our:
+        for b in our_battles:
             seen.add(b["eventId"])
         state["seen_battles"] = list(seen)
         self.save_state(state)
@@ -553,7 +615,7 @@ class BattleMonitor(commands.Cog):
         try:
             sep = discord.Embed(
                 title=f"📥 Backfill: {days} дн",
-                description=f"Загружаем **{len(our)}** битв...",
+                description=f"Загружаем **{len(our_battles)}** битв...",
                 color=EMBED_COLOR
             )
             await history_ch.send(embed=sep, allowed_mentions=discord.AllowedMentions.none())
@@ -562,10 +624,11 @@ class BattleMonitor(commands.Cog):
 
         sent = 0
         failed = 0
-        for i, battle in enumerate(our, start=1):
+        for i, battle in enumerate(our_battles, start=1):
             try:
+                ofac = battle["_our_faction"]
                 await history_ch.send(
-                    embed=self.build_history_embed(battle),
+                    embed=self.build_history_embed(battle, ofac),
                     allowed_mentions=discord.AllowedMentions.none()
                 )
                 sent += 1
@@ -585,15 +648,15 @@ class BattleMonitor(commands.Cog):
             pass
 
         await interaction.followup.send(
-            f"✅ Готово: {sent} из {len(our)} в {history_ch.mention}",
+            f"✅ Готово: {sent} из {len(our_battles)} в {history_ch.mention}",
             ephemeral=True
         )
 
     @app_commands.command(name="testalert", description="Тестовое уведомление (админ)")
     @app_commands.describe(scenario="Сценарий")
     @app_commands.choices(scenario=[
-        app_commands.Choice(name="🚨 Атака на нас", value="attack_on_us"),
-        app_commands.Choice(name="⚔️ Мы забили атаку", value="we_attack"),
+        app_commands.Choice(name="🚨 Атака на нас (Richman)", value="attack_on_us"),
+        app_commands.Choice(name="⚔️ Мы забили атаку (Sunrise)", value="we_attack_sunrise"),
     ])
     async def testalert(
         self,
@@ -605,33 +668,47 @@ class BattleMonitor(commands.Cog):
 
         await interaction.response.defer(ephemeral=True)
 
+        targets = self.get_targets()
+        f1 = targets[0]["faction"] if len(targets) > 0 else "Bloods"
+        s1 = targets[0]["sid"] if len(targets) > 0 else "08"
+
+        f2 = targets[1]["faction"] if len(targets) > 1 else "Армянская Мафия"
+        s2 = targets[1]["sid"] if len(targets) > 1 else "06"
+
         now_ms = int(dt.datetime.now().timestamp() * 1000)
 
         scenarios = {
             "attack_on_us": {
+                "sid": s1, "ofac": f1,
                 "isBizwar": True, "place": "Ammunation #1",
-                "attack": "Русская Мафия", "defense": self.our_faction,
-                "winner": "", "players": 13, "attackKills": 0, "defenseKills": 0
+                "attack": "Русская Мафия", "defense": f1,
+                "winner": "", "players": 13
             },
-            "we_attack": {
-                "isBizwar": True, "place": "Ammunation #3",
-                "attack": self.our_faction, "defense": "Японская Мафия",
-                "winner": "", "players": 11, "attackKills": 0, "defenseKills": 0
+            "we_attack_sunrise": {
+                "sid": s2, "ofac": f2,
+                "isBizwar": True, "place": "Barbershop #2",
+                "attack": f2, "defense": "Японская Мафия",
+                "winner": "", "players": 11
             },
         }
 
         base = scenarios[scenario.value]
         battle = {
             "eventId": "test",
-            "sid": self.our_sid,
+            "sid": base["sid"],
             "createdAt": now_ms,
-            **base
+            "isBizwar": base["isBizwar"],
+            "place": base["place"],
+            "attack": base["attack"],
+            "defense": base["defense"],
+            "winner": base["winner"],
+            "players": base["players"]
         }
 
         alert_ch = self.bot.get_channel(ALERT_CHANNEL_ID)
 
         if alert_ch:
-            alert_result = self.build_alert_embed(battle)
+            alert_result = self.build_alert_embed(battle, base["ofac"])
             if alert_result:
                 embed, _ = alert_result
                 await alert_ch.send(
